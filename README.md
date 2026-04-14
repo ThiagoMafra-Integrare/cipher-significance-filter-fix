@@ -1,8 +1,11 @@
-# Cipher Significance Filter Fix
+# Cipher MCP Fixes
 
-Root cause analysis, community fix, and a Claude Code skill born from a silent data loss bug in [Cipher](https://github.com/campfirein/cipher) (Byterover) v0.3.0 that caused MCP memory operations to silently discard content. The bug was open for ~6 months before being identified and resolved.
+Root cause analyses, patches, and a Claude Code skill born from two independent bugs in [Cipher](https://github.com/campfirein/cipher) (Byterover) v0.3.0:
 
-This repository contains the full investigation, the patch, and a Claude Code skill that was born from the experience.
+1. **Significance Filter** — MCP memory operations silently discard content due to hardcoded regex heuristics. Open for ~6 months before being identified and resolved via [PR #296](https://github.com/campfirein/cipher/pull/296).
+2. **STDIO Crash** — MCP process dies after 1-2 tool calls because stray `console.log` statements corrupt the stdout JSON-RPC channel.
+
+This repository contains both investigations, a unified patch script, and a Claude Code skill that was born from the experience.
 
 ## Timeline
 
@@ -15,6 +18,7 @@ This repository contains the full investigation, the patch, and a Claude Code sk
 | Mar 16, 2026 | [PR #296](https://github.com/campfirein/cipher/pull/296) merged -- `DISABLE_SIGNIFICANCE_FILTER` env var added            |
 | Mar 16, 2026 | Issue #263 closed as completed                                                                                            |
 | Mar 27, 2026 | Issue #275 closed, referencing the significance filter bypass                                                             |
+| Apr 14, 2026 | STDIO crash root cause identified -- `console.log` in search_memory handler corrupts stdout JSON-RPC                      |
 
 ---
 
@@ -140,6 +144,67 @@ The full issue #263 thread shows the complete arc: original report (Sep 2025), m
 
 > **Note on GitHub username:** `@MafraAiDev` was my previous GitHub username. My current account is [@ThiagoMafra-Integrare](https://github.com/ThiagoMafra-Integrare).
 
+## Bug 2: STDIO Crash (Apr 2026)
+
+### The Problem
+
+When running as an MCP server (stdio transport), the Cipher process dies after 1-2 tool calls. Logs show:
+
+```
+[MCP Mode] Shutting down aggregator MCP server...
+```
+
+On the Claude Code side:
+
+```
+JSON Parse error: Unexpected identifier "version"
+STDIO connection dropped after 24s uptime
+```
+
+### Root Cause
+
+The MCP stdio protocol requires that **only** valid JSON-RPC messages appear on stdout. Cipher's Winston logger correctly routes all levels to stderr (`stderrLevels: Object.keys(logLevels)` at line 9163). However, the codebase contains dozens of raw `console.log` calls -- debug leftovers that bypass the logger and write directly to stdout.
+
+The worst offenders are inside the `search_memory` tool handler (lines 26948, 27171, 27173, 27185), which fire on every `cipher_memory_search` call:
+
+```javascript
+console.log("search_memory tool called with:", { query, top_k, ... });
+console.log("search rawPayload", rawPayload);
+console.log("search payload", payload);
+console.log("search baseResult", baseResult);
+```
+
+These outputs mix with the JSON-RPC response on stdout. The MCP client fails to parse the corrupted stream, closes the stdin pipe, and the Cipher process shuts down.
+
+### The Fix
+
+Three lines at the start of `startMcpMode` (line 52531 of `dist/src/app/index.cjs`) redirect all console output to stderr:
+
+```javascript
+console.log = (...args) =>
+  process.stderr.write(args.map(String).join(" ") + "\n");
+console.info = console.log;
+console.warn = console.log;
+```
+
+This covers all stray `console.log` calls without modifying individual handlers. The Winston logger is unaffected (already on stderr). Other modes (CLI, API) are unaffected (patch only runs in MCP mode).
+
+Full investigation: [`docs/stdio-crash-investigation.md`](docs/stdio-crash-investigation.md)
+
+---
+
+## Applying Both Patches
+
+A unified script applies both fixes to the installed `@byterover/cipher` package:
+
+```bash
+bash patches/apply-all.sh
+```
+
+The script is idempotent -- safe to run multiple times. It detects already-applied patches and skips them. Run it after `npm install -g @byterover/cipher`, `npm update`, or Node version changes.
+
+---
+
 ## The Skill: cipher-memory-expert
 
 The investigation produced a Claude Code skill ([`skill/SKILL.md`](skill/SKILL.md)) that encodes everything learned into a deterministic protocol for Cipher memory operations. The skill:
@@ -168,19 +233,22 @@ Or reference it in your project's `.claude/settings.json`.
 
 ```
 cipher-significance-filter-fix/
-├── README.md                       # This file
-├── LICENSE                         # MIT
+├── README.md                           # This file
+├── LICENSE                             # MIT
+├── patches/
+│   └── apply-all.sh                    # Unified patch script (both fixes)
 ├── assets/
-│   ├── pr-296-mention.png          # PR #296 body crediting the root cause analysis
-│   ├── issue-275-mention.png       # Maintainer referencing the analysis in #275
-│   └── issue-263-full.png          # Full issue thread: report, analysis, closure
+│   ├── pr-296-mention.png              # PR #296 body crediting the root cause analysis
+│   ├── issue-275-mention.png           # Maintainer referencing the analysis in #275
+│   └── issue-263-full.png              # Full issue thread: report, analysis, closure
 ├── skill/
-│   └── SKILL.md                    # Claude Code skill: cipher-memory-expert
-└── docs/                           # Investigation documentation (pt-BR)
-    ├── investigation-report.md     # Full investigation report (Mar 13, 2026)
-    ├── setup-guide.md              # Cipher + Qdrant WSL2 setup guide
-    ├── per-project-guide.md        # Per-project Cipher usage protocol
-    └── initial-setup-report.md     # Initial configuration report (Feb 25, 2026)
+│   └── SKILL.md                        # Claude Code skill: cipher-memory-expert
+└── docs/                               # Investigation documentation (pt-BR)
+    ├── investigation-report.md         # Significance filter investigation (Mar 13, 2026)
+    ├── stdio-crash-investigation.md    # STDIO crash investigation (Apr 14, 2026)
+    ├── setup-guide.md                  # Cipher + Qdrant WSL2 setup guide
+    ├── per-project-guide.md            # Per-project Cipher usage protocol
+    └── initial-setup-report.md         # Initial configuration report (Feb 25, 2026)
 ```
 
 > Investigation documentation is written in Brazilian Portuguese (pt-BR), as that was the working language during the investigation.
