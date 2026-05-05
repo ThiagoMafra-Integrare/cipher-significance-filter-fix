@@ -1,11 +1,13 @@
-# Cipher MCP Fixes
+# Cipher MCP Investigations
 
-Root cause analyses, patches, and a Claude Code skill born from two independent bugs in [Cipher](https://github.com/campfirein/cipher) (Byterover) v0.3.0:
+Investigation, root cause analysis, and upstream contribution for two independent bugs in [Cipher](https://github.com/campfirein/cipher) (Byterover) v0.3.0 — a case study in QA methodology applied to MCP server diagnostics.
 
-1. **Significance Filter** — MCP memory operations silently discard content due to hardcoded regex heuristics. Open for ~6 months before being identified and resolved via [PR #296](https://github.com/campfirein/cipher/pull/296).
-2. **STDIO Crash** — MCP process dies after 1-2 tool calls because stray `console.log` statements corrupt the stdout JSON-RPC channel.
+## Status note (2026-05)
 
-This repository contains both investigations, a unified patch script, and a Claude Code skill that was born from the experience.
+- **Cipher v0.3.0 Bug #1 (significance filter)** — RESOLVED upstream via PR #296 (March 2026).
+- **Cipher MCP Server (upstream)** — Discontinued. Campfire migrated to a new product, [byterover-cli](https://github.com/campfirein/byterover-cli).
+- **Derived skill (`cipher-memory-expert`)** — Deprecated within Integrare's internal ecosystem (May 2026); Cipher policy moved to read-only following Bug #3 (separate, unrelated issue with no upstream fix at this time).
+- **This repository** — Preserved as a case study in QA investigation methodology. The technical investigations and PR #296 remain valid historical records.
 
 ## Timeline
 
@@ -24,7 +26,7 @@ This repository contains both investigations, a unified patch script, and a Clau
 
 ## The Problem
 
-Cipher v0.3.0 has a memory persistence layer that uses vector embeddings (Qdrant, ChromaDB, etc.) to store and retrieve knowledge. When running as an MCP server (the standard integration mode for AI coding agents like Claude Code), all `cipher_extract_and_operate_memory` calls returned:
+Cipher v0.3.0 has a memory persistence layer that uses vector embeddings (Qdrant, ChromaDB, etc.) to store and retrieve knowledge. When running as an MCP server (the standard integration mode for MCP clients such as Claude Code and RooCode), all `cipher_extract_and_operate_memory` calls returned:
 
 ```
 extracted: 0, skipped: 1
@@ -207,7 +209,7 @@ The script is idempotent -- safe to run multiple times. It detects already-appli
 
 ## The Skill: cipher-memory-expert
 
-The investigation produced a Claude Code skill ([`skill/SKILL.md`](skill/SKILL.md)) that encodes everything learned into a deterministic protocol for Cipher memory operations. The skill:
+The investigation produced a derived skill ([`skill/SKILL.md`](skill/SKILL.md)) that encodes everything learned into a deterministic protocol for Cipher memory operations. The skill:
 
 - Defines a fixed save protocol with threshold overrides (`similarityThreshold: 0.95`)
 - Distinguishes between dedup skips (`skipped: 1`) and extraction failures (`facts: []`)
@@ -216,18 +218,18 @@ The investigation produced a Claude Code skill ([`skill/SKILL.md`](skill/SKILL.m
 - Provides step-by-step recovery sequences for both dedup and extraction failures
 - Contains the full significance filter patch with diagnosis and reapply instructions
 
-The skill is designed to be dropped into any Claude Code project directory as a reusable skill file.
+The skill is preserved here as a historical artifact (see Status note above).
 
 ### How to use the skill
 
-Copy `skill/SKILL.md` to your Claude Code skills directory:
+Copy `skill/SKILL.md` to your skills directory:
 
 ```bash
 mkdir -p ~/.claude/skills/cipher-memory-expert
 cp skill/SKILL.md ~/.claude/skills/cipher-memory-expert/SKILL.md
 ```
 
-Or reference it in your project's `.claude/settings.json`.
+Or reference it from your project configuration.
 
 ## Repository Contents
 
@@ -242,7 +244,7 @@ cipher-significance-filter-fix/
 │   ├── issue-275-mention.png           # Maintainer referencing the analysis in #275
 │   └── issue-263-full.png              # Full issue thread: report, analysis, closure
 ├── skill/
-│   └── SKILL.md                        # Claude Code skill: cipher-memory-expert
+│   └── SKILL.md                        # Derived skill: cipher-memory-expert
 └── docs/                               # Investigation documentation (pt-BR)
     ├── investigation-report.md         # Significance filter investigation (Mar 13, 2026)
     ├── stdio-crash-investigation.md    # STDIO crash investigation (Apr 14, 2026)
@@ -252,6 +254,13 @@ cipher-significance-filter-fix/
 ```
 
 > Investigation documentation is written in Brazilian Portuguese (pt-BR), as that was the working language during the investigation.
+
+## What this demonstrates
+
+- **Root cause analysis methodology** — distinguishing identical-looking response signals (filter skip vs dedup skip) requires going below the API surface into debug logs and source code inspection.
+- **Cross-platform debugging discipline** — investigation extended across MCP clients, vector stores (Qdrant, ChromaDB), and LLM providers (Gemini, OpenAI, AWS Bedrock, LM Studio).
+- **Upstream contribution workflow** — public root cause analysis on Issue #263, maintainer engagement, PR shipped within 3 days of analysis.
+- **Documentation discipline** — full investigation timeline preserved with reproducible steps, code references (line 23226 of `dist/src/core/index.cjs`), and verification commands.
 
 ## Links
 
